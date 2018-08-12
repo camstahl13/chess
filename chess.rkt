@@ -1,25 +1,48 @@
 #lang racket
-(struct piece (player type moved move))
+; BPS: Adding the #:transparent flag allows printf to display the fields of the struct.
+(struct piece (player type) #:transparent)
 (require anaphoric)
+;(require (prefix-in dc: data/collection))
 
 ;**In moves hash, the two elements are forward/backward and left/right**;
 
+(define (delta pos1 pos2)
+  (let ([r1 (car pos1)]
+        [c1 (cdr pos1)]
+        [r2 (car pos2)]
+        [c2 (cdr pos2)])
+    (cons (- r2 r1) (- c2 c1))))
+
 (define all-moves
-  (hash "pawn" '((1 0) (2 0) (1 -1) (1 1))
-        "knight" '((2 -1) (2 1) (-2 -1) (-2 1) (1 2) (1 -2) (-1 2) (-1 -2))
-        "bishop" '((#t #t))
-        "rook" '((#t 0) (0 #t))
-        "queen" '((#t 0) (0 #t) (#t #t))
-        "king" '((1 -1) (1 0) (1 1) (0 1) (-1 1) (-1 0) (-1 -1) (0 -1))))
+  ; BPS: Idea: What if there were 2 distinct types of pawns, and the original
+  ; pawn piece were replaced with the second type after initial move? This
+  ; approach would obviate need for "moved" flag and the special logic
+  ; stripping off the longer moves for all subsequent moves.
+  ; BPS: Not recommending a change here, as what you've got works fine; just
+  ; pointing out an alternate approach... What if moves were expressed as a
+  ; vector and max-steps. IOW, mostly what you have, except the #t's would be
+  ; 1's and -1's, with the corresponding max-step being 8. Might make some
+  ; things simpler (since vector math is easer with 1's than with #t's), but
+  ; whether it would be simpler overall, I'm not sure... Again, just throwing
+  ; out an idea, not saying there's anything wrong with the way you did it.
+  (hash "moved pawn" (hash #(1 0) 1 #(1 -1) 1 #(1 1) 1)
+        "unmoved pawn" (hash #(1 0) 2 #(1 -1) 1 #(1 1) 1)
+        "knight" (vector #(2 -1) #(2 1) #(-2 -1) #(-2 1) #(1 2) #(1 -2) #(-1 2) #(-1 -2))
+        "bishop" (hash #(1 1) 7 #(1 -1) 7 #(-1 1) 7 #(-1 -1) 7)
+        "rook" (hash #(1 0) 7 #(0 1) 7 #(-1 0) 7 #(0 -1) 7)
+        "queen" (hash #(1 0) 7 #(0 1) 7 #(-1 0) 7 #(0 -1) 7 #(1 1) 7 #(1 -1) 7 #(-1 1) 7 #(-1 -1) 7)
+        "king" (hash #(1 -1) 1 #(1 0) 1 #(1 1) 1 #(0 1) 1 #(-1 1) 1 #(-1 0) 1 #(-1 -1) 1 #(0 -1) 1)))
 
 (define displayables
-  (hash (cons "pawn" 0) " \u2659 "
+  (hash (cons "moved pawn" 0) " \u2659 "
+        (cons "unmoved pawn" 0) " \u2659 "
         (cons "knight" 0) " \u2658 "
         (cons "bishop" 0) " \u2657 "
         (cons "rook" 0) " \u2656 "
         (cons "queen" 0) " \u2655 "
         (cons "king" 0) " \u2654 "
-        (cons "pawn" 1) " \u265F "
+        (cons "moved pawn" 1) " \u265F "
+        (cons "unmoved pawn" 1) " \u265F "
         (cons "knight" 1) " \u265E "
         (cons "bishop" 1) " \u265D "
         (cons "rook" 1) " \u265C "
@@ -34,17 +57,15 @@
              [j (range 0 8)]
              [t (if (or (= i 0) (= i 7))
                     (list "rook" "bishop" "knight" "king" "queen" "knight" "bishop" "rook")
-                    (make-list 8 "pawn"))])                    
-    (values (cons i j) (piece p t #f t))))
+                    (make-list 8 "unmoved pawn"))])                    
+    (values (cons i j) (piece p t))))
 
-(define (member_moves? rdifference cdifference moves)
-  (or (member (list rdifference cdifference) moves)
-      (and (member (list #t #t) moves)
-           (not (zero? rdifference))
-           (not (zero? cdifference))
-           (= (abs rdifference) (abs cdifference)))
-      (and (not (zero? rdifference)) (zero? cdifference) (member (list #t 0) moves))
-      (and (zero? rdifference) (not (zero? cdifference)) (member (list 0 #t) moves))))
+(define (member_moves? rdiff cdiff moves type)
+  (if (equal? type "knight")
+      (vector-member (vector rdiff cdiff) moves)
+      (let ([absmaxrcd (max (abs rdiff) (abs cdiff))])
+        (and-let [hr (hash-ref moves (vector (/ rdiff absmaxrcd) (/ cdiff absmaxrcd)) #f)]
+                 (<= absmaxrcd hr)))))
 
 (define (on_board? rdestination cdestination)
   (and (>= rdestination 0)
@@ -66,50 +87,48 @@
 
 (define (gen_path start finish inc)
   (let ([p-new-el (cons (+ (car start) (car inc)) (+ (cdr start) (cdr inc)))])
-    (cond
-      [(equal? p-new-el finish) '()]
-      [else (cons p-new-el (gen_path p-new-el finish inc))])))
+    ; BPS: cond provides no advantage over if here.
+    (if (equal? p-new-el finish)
+        empty
+        (cons p-new-el (gen_path p-new-el finish inc)))))
 
 (define (has_path? player pieces posp posd difference type)
-  (printf "\nGetting path...\n")
-  (let* ([r1 (car posp)]
-         [c1 (cdr posp)]
-         [r2 (car posd)]
-         [c2 (cdr posd)]
-         [rd (car difference)]
+  (printf "\ndifference = ~a\n" difference)
+  (let* ([rd (car difference)]
          [cd (cdr difference)])
     (or (and (< (abs rd) 2) (< (abs cd) 2))
-        (let ([gp (gen_path posp posd (cons (if (zero? rd) 0 (/ rd (abs rd))) (if (zero? cd) 0 (/ cd (abs cd)))))])
-          (andmap (lambda (el)
+	; BPS: The "sgn" operation was done elsewhere (in check?); should probably have it one place.
+        (let* ([gp (gen_path posp posd (cons (sgn rd) (sgn cd)))]
+               [test (println gp)])
+          (if (andmap (lambda (el)
                     (let ([r (car el)]
                           [c (cdr el)])
-                      (not (and-let [hr (hash-ref pieces (cons r c) #f)]
-                                    (= (piece-player hr) player)))))
-                  gp)))))
+                      (not (hash-ref pieces (cons r c) #f))))
+                  gp)
+              gp
+              #f)))))
 
 (define (check_move player pieces posp posd)
   (let* ([piece (hash-ref pieces posp #f)]
          [type (if piece (piece-type piece) #f)]
-         [moves (if piece (hash-ref all-moves (piece-move piece) #f) #f)]
-         [r1 (car posp)]
-         [c1 (cdr posp)]
-         [r2 (car posd)]
-         [c2 (cdr posd)]
-         [rd (- r2 r1)]
-         [cd (- c2 c1)])
+         [moves (if piece (hash-ref all-moves (piece-type piece) #f) #f)]
+	 ; BPS: Consider implementing function that takes 2 positions and
+	 ; returns (eg) the vector between, or vector and # of steps, or
+	 ; something like that. Just seems like there are a number of places
+	 ; where you're extracting row/col and calculating deltas. Could
+	 ; probably reduce some of the boilerplate with a well-designed helper
+	 ; function or two...
+         [difference (delta posp posd)]
+         [rd (car difference)]
+         [cd (cdr difference)])
     (and (valid_piece? player pieces posp)
          (valid_dest? player pieces posd)
-         (member_moves? (if (= player 0) (- r2 r1) (- r1 r2))
-                        (if (= player 0) (- c1 c2) (- c2 c1))
-                        (if (equal? type "pawn")
-                            (if (hash-has-key? pieces posd)
-                                (rest (rest moves))
-                                (if (piece-moved piece)
-                                    (list (first moves))
-                                    (list (first moves) (second moves))))
-                            moves))
+         (member_moves? (if (= player 0) rd (- 0 rd))
+                        (if (= player 0) (- 0 cd) cd)
+                        moves
+                        type)
          (or (equal? type "knight")
-             (has_path? player pieces posp posd (cons rd cd) type)))))
+             (has_path? player pieces posp posd difference type)))))
 
 ; HELPER FUNCTIONS BELOW
 (define (alternate-string str sep cnt)
@@ -156,9 +175,7 @@
                                  (create-separator 8)))))))
 
 (define (get_valid_move player pieces)
-  (let ([prompt_user1 (printf "Input format: [location of piece]->[location of destination]: i.e., A7->C7\n")]      
-        [prompt_user2 (printf (string-append "Input your move, Player " (if (= player 0) "One." "Two.")))]
-        [raw_input (read-line)])
+  (let ([raw_input (read-line)])
     (if (and (string? raw_input) (= (string-length raw_input) 6) (equal? (substring raw_input 2 4) "->"))
         (let ([rp (string-ref raw_input 0)]
               [cp (string->number (substring raw_input 1 2))]
@@ -173,59 +190,44 @@
               (get_valid_move player pieces)))
         (get_valid_move player pieces))))
 
+(define (check? pieces king opp-player)
+  ; BPS: (modulo (add1 player) 2) is a more natural way to express this.
+  (let ([paths (foldl (lambda (piece acc)
+                        ; BPS: anaphoric let not really used/needed here.
+                        (let ([hp (check_move player
+                                              pieces
+                                              (car piece)
+                                              king)])
+                          (if (boolean? hp)
+                              (if hp (cons (cons (car piece) empty) acc) acc)
+                              (cons (cons (car piece) hp) acc))))
+                      '()
+                      (foldl (lambda (el acc)
+                               (if (= opp-player (piece-player (cdr el)))
+                                   (cons (car el) acc)
+                                   acc))
+                             '()
+                             pieces))])
+    (if (empty? paths)
+        #f
+        paths)))
+
 (define (make_move player pieces posp posd)
   (let* ([p (hash-ref pieces posp #f)]
          [v1 (hash-set pieces posd (piece (piece-player p)
-                                          (piece-type p)
-                                          #t
-                                          (piece-move p)))]
+                                          (let ([pt (piece-type p)])
+                                            (if (equal? pt "unmoved pawn")
+                                                "moved pawn"
+                                                pt))))]
          [v2 (hash-remove v1 posp)])
     v2))
 
-(define (find_moves piece pieces
-
-(define (find_escapes king paths pieces)
-
-(define (check? pieces king player)
-  (let* ([opp-player (abs (- player 1))])
-        (let ([paths (foldl (lambda (piece acc)
-                              (if-let (hp (check_move player
-                                                      pieces
-                                                      (car piece)
-                                                      king))
-                                      (append (let* ([r1 (caar piece)]
-                                                     [c1 (cdar piece)]
-                                                     [r2 (car king)]
-                                                     [c2 (cdr king)]
-                                                     [rd (- r2 r1)]
-                                                     [cd (- c2 c1)])
-                                                (if (or (equal? (piece-type (cdr piece)) "knight")
-                                                        (and (< (abs rd) 2) (< (abs cd) 2)))
-                                                    (cons king '())
-                                                    (cons king (gen_path (car piece)
-                                                                         king
-                                                                         (cons (if (zero? rd) 0 (/ rd (abs rd)))
-                                                                               (if (zero? cd) 0 (/ cd (abs cd))))))) acc))
-                                      acc))
-                            '()
-                            (filter (lambda (el) (= opp-player (piece-player (cdr el)))) (hash->list pieces)))])
-          (if (empty? paths)
-              #f
-              paths))))
-
 (define (game_loop pieces player)
   (display_board pieces)
-  (let* ([king (for/or ([k (hash-keys pieces)]
-                        [v (hash-values pieces)])
-                 (and (= (piece-player v) player) (equal? (piece-type v) "king") k))]
-         [paths (check? pieces king player)]
-         [escapes (if paths (find_escapes king paths pieces) #t)])
-    (print res)
-    (if (and (boolean? res) res)
-        (printf (string-append "Game over! Player " (if (= player 0) "One" "Two") " wins!"))
-        (let-values ([(posp posd) (get_valid_move player pieces res)])
-          (let ([npieces (make_move player pieces posp posd)])
-                 (game_loop npieces (abs (- player 1))))))))
-  
+  (let-values ([(posp posd) (get_valid_move player pieces)])
+    (let ([npieces (make_move player pieces posp posd)])
+      (game_loop npieces (abs (- player 1))))))
+
+;(printf "~a~n" (init_board))
 
 (game_loop (init_board) 0)
