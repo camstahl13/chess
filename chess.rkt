@@ -71,12 +71,13 @@
       [else (cons p-new-el (gen_path p-new-el finish inc))])))
 
 (define (has_path? player pieces posp posd difference type)
+  (printf "\nGetting path...\n")
   (let* ([r1 (car posp)]
-        [c1 (cdr posp)]
-        [r2 (car posd)]
-        [c2 (cdr posd)]
-        [rd (car difference)]
-        [cd (cdr difference)])
+         [c1 (cdr posp)]
+         [r2 (car posd)]
+         [c2 (cdr posd)]
+         [rd (car difference)]
+         [cd (cdr difference)])
     (or (and (< (abs rd) 2) (< (abs cd) 2))
         (let ([gp (gen_path posp posd (cons (if (zero? rd) 0 (/ rd (abs rd))) (if (zero? cd) 0 (/ cd (abs cd)))))])
           (andmap (lambda (el)
@@ -181,10 +182,50 @@
          [v2 (hash-remove v1 posp)])
     v2))
 
+(define (find_moves piece pieces
+
+(define (find_escapes king paths pieces)
+
+(define (check? pieces king player)
+  (let* ([opp-player (abs (- player 1))])
+        (let ([paths (foldl (lambda (piece acc)
+                              (if-let (hp (check_move player
+                                                      pieces
+                                                      (car piece)
+                                                      king))
+                                      (append (let* ([r1 (caar piece)]
+                                                     [c1 (cdar piece)]
+                                                     [r2 (car king)]
+                                                     [c2 (cdr king)]
+                                                     [rd (- r2 r1)]
+                                                     [cd (- c2 c1)])
+                                                (if (or (equal? (piece-type (cdr piece)) "knight")
+                                                        (and (< (abs rd) 2) (< (abs cd) 2)))
+                                                    (cons king '())
+                                                    (cons king (gen_path (car piece)
+                                                                         king
+                                                                         (cons (if (zero? rd) 0 (/ rd (abs rd)))
+                                                                               (if (zero? cd) 0 (/ cd (abs cd))))))) acc))
+                                      acc))
+                            '()
+                            (filter (lambda (el) (= opp-player (piece-player (cdr el)))) (hash->list pieces)))])
+          (if (empty? paths)
+              #f
+              paths))))
+
 (define (game_loop pieces player)
   (display_board pieces)
-  (let-values ([(posp posd) (get_valid_move player pieces)])
-    (let ([npieces (make_move player pieces posp posd)])
-      (game_loop npieces (abs (- player 1))))))
+  (let* ([king (for/or ([k (hash-keys pieces)]
+                        [v (hash-values pieces)])
+                 (and (= (piece-player v) player) (equal? (piece-type v) "king") k))]
+         [paths (check? pieces king player)]
+         [escapes (if paths (find_escapes king paths pieces) #t)])
+    (print res)
+    (if (and (boolean? res) res)
+        (printf (string-append "Game over! Player " (if (= player 0) "One" "Two") " wins!"))
+        (let-values ([(posp posd) (get_valid_move player pieces res)])
+          (let ([npieces (make_move player pieces posp posd)])
+                 (game_loop npieces (abs (- player 1))))))))
+  
 
 (game_loop (init_board) 0)
