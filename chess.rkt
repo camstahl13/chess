@@ -190,27 +190,74 @@
               (get_valid_move player pieces)))
         (get_valid_move player pieces))))
 
-(define (check? pieces king opp-player)
-  ; BPS: (modulo (add1 player) 2) is a more natural way to express this.
-  (let ([paths (foldl (lambda (piece acc)
-                        ; BPS: anaphoric let not really used/needed here.
-                        (let ([hp (check_move player
-                                              pieces
-                                              (car piece)
-                                              king)])
-                          (if (boolean? hp)
-                              (if hp (cons (cons (car piece) empty) acc) acc)
-                              (cons (cons (car piece) hp) acc))))
-                      '()
-                      (foldl (lambda (el acc)
-                               (if (= opp-player (piece-player (cdr el)))
-                                   (cons (car el) acc)
-                                   acc))
-                             '()
-                             pieces))])
-    (if (empty? paths)
-        #f
-        paths)))
+(define (actualij coords ci cj player)
+  (cons (if (= player 0) (+ (car coords) ci) (- (car coords) ci))
+        (if (= player 0) (- (cdr coords) cj) (+ (cdr coords) cj))))
+
+(define (can_reach? piece destination)
+  (let* ([piece-t (piece-type (cdr piece))]
+         [piece-p (piece-player (cdr piece))]
+         [di (if (= piece-p 0) (- (car destination) (caar piece)) (- (caar piece) (car destination)))]
+         [dj (if (= piece-p 0) (- (cdr destination) (cdar piece)) (- (cdar piece) (cdr destination)))])
+    (cond [(or (equal? piece-t "moved pawn") (equal? piece-t "unmoved pawn"))
+           (and (= di 1) (= (abs dj) 1))]
+          [(equal? piece-t "knight")
+           (or (and (= (abs di) 2) (= (abs dj) 1))
+               (and (= (abs di) 1) (= (abs dj) 2)))]
+          [(equal? piece-t "bishop")
+           (= (abs di) (abs dj))]
+          [(equal? piece-t "rook")
+           (or (and (zero? di) (not (zero? dj)))
+               (and (not (zero? di)) (zero? dj)))]
+          [(equal? piece-t "queen")
+           (or (= (abs di) (abs dj))
+               (or (and (zero? di)
+                        (not (zero? dj)))
+                   (and (not (zero? di))
+                        (zero? dj))))]
+          [(equal? piece-t "king")
+           (and (<= (abs di) 1) (<= (abs dj) 1))]
+          [else #f])))
+
+(define (is_threatened? piece pieces player want-output?)
+  (for/fold ([blocks (hash)]
+             [threats #f]
+             #:result (if want-output?
+                          (values blocks threats)
+                          threats))
+            ([i '(-2 -1 0 1 2)]
+             #:when #t
+             [j (if (= 1 (abs i))
+                    '(-2 -1 0 1 2)
+                    '(1 -1))]
+             #:break (or (and want-output? (eq? threats #t)) (and (not want-output?) (pair? threats))))
+    (for/fold ([player-block #f]
+               [threat #f]
+               [opp-block #f]
+               [done #f]
+               #:result (cond
+                          [(and (pair? player-block) threat) (values (hash-set blocks player-block threat)
+                                                                     threats)]
+                          [threat (values blocks (if threats #t threat))]
+                          [else (values blocks threats)]))
+              ([k (in-range (if (or (= (abs i) 2) (= (abs j) 2)) 1 8))]
+               #:break (or done
+                           threat
+                           opp-block
+                           (or (eq? player-block #t) (and (not want-output?) player-block))))
+      (let* ([actuals (actualij piece
+                                (if (or (zero? k) (zero? i)) i (* i k))
+                                (if (or (zero? k) (zero? j)) j (* j k))
+                                player)]
+             [hr (hash-ref pieces actuals #f)])
+        (if (not hr)
+            (values player-block threat opp-block (not (and (positive? (car actuals)) (<= (car actuals) 8)
+                                                            (positive? (cdr actuals)) (<= (cdr actuals) 8))))
+            (if (= (piece-player hr) player)
+                (values (if player-block #t actuals) threat opp-block #f)
+                (if (can_reach? (cons actuals hr) piece)
+                    (values player-block actuals opp-block #f)
+                    (values player-block threat #t #f))))))))
 
 (define (make_move player pieces posp posd)
   (let* ([p (hash-ref pieces posp #f)]
@@ -224,6 +271,14 @@
 
 (define (game_loop pieces player)
   (display_board pieces)
+  (let-values ([(blocks-hash threats) (is_threatened? (car (findf (lambda (el)
+                                                                    (and (= player (piece-player (cdr el)))
+                                                                         (equal? (piece-type (cdr el)) "king")))
+                                                                  (hash->list pieces)))
+                                                      pieces
+                                                      player
+                                                      #t)])
+    (printf "blocks-hash looks like this: ~a\nthreats look like this: ~a\nplayer = ~a\n" blocks-hash threats player))
   (let-values ([(posp posd) (get_valid_move player pieces)])
     (let ([npieces (make_move player pieces posp posd)])
       (game_loop npieces (abs (- player 1))))))
