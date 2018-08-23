@@ -93,13 +93,11 @@
         (cons p-new-el (gen_path p-new-el finish inc)))))
 
 (define (has_path? player pieces posp posd difference type)
-  (printf "\ndifference = ~a\n" difference)
   (let* ([rd (car difference)]
          [cd (cdr difference)])
     (or (and (< (abs rd) 2) (< (abs cd) 2))
 	; BPS: The "sgn" operation was done elsewhere (in check?); should probably have it one place.
-        (let* ([gp (gen_path posp posd (cons (sgn rd) (sgn cd)))]
-               [test (println gp)])
+        (let* ([gp (gen_path posp posd (cons (sgn rd) (sgn cd)))])
           (if (andmap (lambda (el)
                     (let ([r (car el)]
                           [c (cdr el)])
@@ -112,12 +110,12 @@
   (let* ([piece (hash-ref pieces posp #f)]
          [type (if piece (piece-type piece) #f)]
          [moves (if piece (hash-ref all-moves (piece-type piece) #f) #f)]
-	 ; BPS: Consider implementing function that takes 2 positions and
-	 ; returns (eg) the vector between, or vector and # of steps, or
-	 ; something like that. Just seems like there are a number of places
-	 ; where you're extracting row/col and calculating deltas. Could
-	 ; probably reduce some of the boilerplate with a well-designed helper
-	 ; function or two...
+         ; BPS: Consider implementing function that takes 2 positions and
+         ; returns (eg) the vector between, or vector and # of steps, or
+         ; something like that. Just seems like there are a number of places
+         ; where you're extracting row/col and calculating deltas. Could
+         ; probably reduce some of the boilerplate with a well-designed helper
+         ; function or two...
          [difference (delta posp posd)]
          [rd (car difference)]
          [cd (cdr difference)])
@@ -128,7 +126,15 @@
                         moves
                         type)
          (or (equal? type "knight")
-             (has_path? player pieces posp posd difference type)))))
+             (has_path? player pieces posp posd difference type))
+         (not (is_threatened? (car (findf (lambda (el)
+                                            (and (= player (piece-player (cdr el)))
+                                                 (equal? (piece-type (cdr el)) "king")))
+                                          (hash->list pieces)))
+                              (hash-set (hash-remove pieces posp) posd piece)
+                              player
+                              (hash)
+                              #f)))))
 
 ; HELPER FUNCTIONS BELOW
 (define (alternate-string str sep cnt)
@@ -219,7 +225,17 @@
            (and (<= (abs di) 1) (<= (abs dj) 1))]
           [else #f])))
 
-(define (is_threatened? piece pieces player want-output?)
+(define (make_move player pieces posp posd)
+  (let* ([p (hash-ref pieces posp #f)]
+         [v1 (hash-set pieces posd (piece (piece-player p)
+                                          (let ([pt (piece-type p)])
+                                            (if (equal? pt "unmoved pawn")
+                                                "moved pawn"
+                                                pt))))]
+         [v2 (hash-remove v1 posp)])
+    v2))
+
+(define (is_threatened? piece pieces player stuck want-output?)
   (for/fold ([blocks (hash)]
              [threats #f]
              #:result (if want-output?
@@ -252,36 +268,120 @@
              [hr (hash-ref pieces actuals #f)])
         (if (not hr)
             (values player-block threat opp-block (not (and (positive? (car actuals)) (<= (car actuals) 8)
-                                                            (positive? (cdr actuals)) (<= (cdr actuals) 8))))
+                                                     (positive? (cdr actuals)) (<= (cdr actuals) 8))))
             (if (= (piece-player hr) player)
                 (values (if player-block #t actuals) threat opp-block #f)
-                (if (can_reach? (cons actuals hr) piece)
+                (if (and (not (hash-ref stuck actuals #f)) (can_reach? (cons actuals hr) piece))
                     (values player-block actuals opp-block #f)
                     (values player-block threat #t #f))))))))
 
-(define (make_move player pieces posp posd)
-  (let* ([p (hash-ref pieces posp #f)]
-         [v1 (hash-set pieces posd (piece (piece-player p)
-                                          (let ([pt (piece-type p)])
-                                            (if (equal? pt "unmoved pawn")
-                                                "moved pawn"
-                                                pt))))]
-         [v2 (hash-remove v1 posp)])
-    v2))
+(define (adjacents_safe? piece pieces player)
+  (let ([npieces (hash-remove pieces piece)])
+    (printf "\nnpieces = \n")
+    (pretty-print npieces)
+    (for/or ([i '(1 0 -1)]
+             #:when #t
+             [j (if (zero? i) '(1 -1) '(1 0 -1))])
+      (let* ([actuals (actualij piece i j player)]
+             [actual-i (car actuals)]
+             [actual-j (cdr actuals)])
+        (and (positive? actual-i)
+             (positive? actual-j)
+             (<= actual-i 7)
+             (<= actual-j 7)
+             (if-let [hr (hash-ref npieces actuals #f)]
+                     (not (= (piece-player hr) player))
+                     #t)
+             (not (is_threatened? actuals npieces player (hash) #f))
+             (printf "\n~a is safe." actuals))))))
+
+(define moves-hash
+  (hash
+   "moved pawn" '((1 . -1) (1 . 1) (1 . 0))
+   "unmoved pawn" '((1 . -1) (1 . 1) (1 . 0) (2 . 0))
+   "knight" '((2 . 1) (2 . -1) (-2 . 1) (-2 . -1) (1 . 2) (1 . -2) (-1 . 2) (-1 . -2))
+   "bishop" '((1 . 1) (1 . -1) (-1 . 1) (-1 . -1))
+   "rook" '((1 . 0) (-1 . 0) (0 . -1) (0 . 1))
+   "queen" '((1 . 1) (1 . -1) (-1 . 1) (-1 . -1) (1 . 0) (-1 . 0) (0 . -1) (0 . 1))
+   "king" '((1 . 1) (1 . -1) (-1 . 1) (-1 . -1) (1 . 0) (-1 . 0) (0 . -1) (0 . 1))))
+
+(define (gen_path2 start finish)
+  (if (equal? start finish)
+      empty
+      (cons start (gen_path2 (cons (+ (sgn (- (car finish) (car start))) (car start))
+                                   (+ (sgn (- (cdr finish) (cdr start))) (cdr start)))
+                             finish))))
+
+(define (can_avoid_checkmate? king threat stuck pieces player)
+  (printf "\nking = ~a; threat = ~a\n" king threat)
+  (for/or ([pos (begin (println (gen_path2 threat king)) (gen_path2 threat king))])
+    (is_threatened? pos pieces player (hash-set stuck king #t) #f)))
+
+(define (can_avoid_stalemate? king constrained pieces player)
+  (for/or ([piece (filter (lambda (el) (and (= player (piece-player (cdr el))) (not (equal? "king" (piece-type (cdr el))))))
+                          (hash->list pieces))])
+    (let-values ([(hr path min-i max-i min-j max-j)
+                  (if-let [hr (hash-ref constrained (car piece) #f)]
+                          (values hr (gen_path2 hr king) #f #f #f #f)
+                          (let* ([min-i (if (= player 0) (- 0 (caar piece)) (- (caar piece) 7))]
+                                 [max-i (- 7 (abs min-i))]
+                                 [min-j (if (= player 0) (- 0 (cdar piece)) (- (cdar piece) 7))]
+                                 [max-j (- 7 (abs min-j))])
+                            (values #f #f min-i max-i min-j max-j)))])
+      (for/or ([move (filter (lambda (el) (if hr
+                                              (member el path)
+                                              (and (>= (car el) min-i)
+                                                   (<= (car el) max-i)
+                                                   (>= (cdr el) min-j)
+                                                   (<= (cdr el) max-j))))
+                             (hash-ref moves-hash (piece-type (cdr piece))))])
+        (let* ([actuals (actualij (car piece) (car move) (cdr move) player)]
+               [hr (hash-ref pieces actuals #f)])
+          (cond
+            [(false? hr)
+             (not (and (or (equal? (piece-type (cdr piece)) "moved pawn")
+                           (equal? (piece-type (cdr piece)) "unmoved pawn"))
+                       (not (zero? (cdr move)))))]
+            [(= (piece-player hr) (abs (- player 1)))
+             (not (and (or (equal? (piece-type (cdr piece)) "moved pawn")
+                           (equal? (piece-type (cdr piece)) "unmoved pawn"))
+                       (zero? (cdr move))))]
+            [else #f]))))))
+           
+(define (checkmate_or_stalemate? king pieces player)
+  (if-let [a_s (adjacents_safe? king pieces player)]
+      (begin (printf "\na_s = ~a\n" a_s) "neither")
+      (let-values ([(blocks-hash threats) (is_threatened? king pieces player (hash) #t)])
+        (printf "\nthreats = ~a\n" threats)
+        (cond
+          [(eq? threats #t) "checkmate"]
+          [(pair? threats) (if (can_avoid_checkmate? king threats blocks-hash pieces player)
+                               "neither"
+                               "checkmate")]
+          [else (if (can_avoid_stalemate? king blocks-hash pieces player)
+                    "neither"
+                    "stalemate")]))))
 
 (define (game_loop pieces player)
   (display_board pieces)
-  (let-values ([(blocks-hash threats) (is_threatened? (car (findf (lambda (el)
-                                                                    (and (= player (piece-player (cdr el)))
-                                                                         (equal? (piece-type (cdr el)) "king")))
-                                                                  (hash->list pieces)))
-                                                      pieces
-                                                      player
-                                                      #t)])
-    (printf "blocks-hash looks like this: ~a\nthreats look like this: ~a\nplayer = ~a\n" blocks-hash threats player))
-  (let-values ([(posp posd) (get_valid_move player pieces)])
-    (let ([npieces (make_move player pieces posp posd)])
-      (game_loop npieces (abs (- player 1))))))
+  (let ([cos (checkmate_or_stalemate? (car (findf (lambda (el)
+                                                    (and (= player (piece-player (cdr el)))
+                                                         (equal? (piece-type (cdr el)) "king")))
+                                                  (hash->list pieces)))
+                                      pieces
+                                      player)])
+    (if (equal? cos "neither")
+        (let-values ([(posp posd) (get_valid_move player pieces)])
+          (let ([npieces (make_move player pieces posp posd)])
+            (game_loop npieces (abs (- player 1)))))
+        (printf (string-append "Player "
+                               (if (= player 0) "One " "Two ")
+                               "is "
+                               cos
+                               "d. "
+                               (if (equal? cos "checkmate")
+                                   (string-append "Player " (if (= player 0) "Two " "One ") "wins!")
+                                   "It's a draw!"))))))
 
 ;(printf "~a~n" (init_board))
 
