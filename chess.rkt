@@ -391,7 +391,7 @@
 	      (match datum
 		[(and (? symbol?)
 		      (app symbol->string
-			   (regexp #px"([A-G][0-7])[\\s]*->[\\s]*([A-G][0-7])"
+			   (regexp #px"([A-H][0-7])[\\s]*->[\\s]*([A-H][0-7])"
 				   (list _ src dst))))
 		 (thread-send gameplay-thread (format "~a->~a" src dst))]
 		[(? (compose not list?) (cons src dst))
