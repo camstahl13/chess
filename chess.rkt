@@ -181,7 +181,7 @@
                                  (create-separator 8)))))))
 
 (define (get_valid_move player pieces)
-  (let ([raw_input (read-line)])
+  (let ([raw_input (thread-receive)])
     (if (and (string? raw_input) (= (string-length raw_input) 6) (equal? (substring raw_input 2 4) "->"))
         (let ([rp (string-ref raw_input 0)]
               [cp (string->number (substring raw_input 1 2))]
@@ -277,8 +277,6 @@
 
 (define (adjacents_safe? piece pieces player)
   (let ([npieces (hash-remove pieces piece)])
-    (printf "\nnpieces = \n")
-    (pretty-print npieces)
     (for/or ([i '(1 0 -1)]
              #:when #t
              [j (if (zero? i) '(1 -1) '(1 0 -1))])
@@ -292,8 +290,7 @@
              (if-let [hr (hash-ref npieces actuals #f)]
                      (not (= (piece-player hr) player))
                      #t)
-             (not (is_threatened? actuals npieces player (hash) #f))
-             (printf "\n~a is safe." actuals))))))
+             (not (is_threatened? actuals npieces player (hash) #f)))))))
 
 (define moves-hash
   (hash
@@ -313,7 +310,6 @@
                              finish))))
 
 (define (can_avoid_checkmate? king threat stuck pieces player)
-  (printf "\nking = ~a; threat = ~a\n" king threat)
   (for/or ([pos (begin (println (gen_path2 threat king)) (gen_path2 threat king))])
     (is_threatened? pos pieces player (hash-set stuck king #t) #f)))
 
@@ -350,9 +346,8 @@
            
 (define (checkmate_or_stalemate? king pieces player)
   (if-let [a_s (adjacents_safe? king pieces player)]
-      (begin (printf "\na_s = ~a\n" a_s) "neither")
+      "neither"
       (let-values ([(blocks-hash threats) (is_threatened? king pieces player (hash) #t)])
-        (printf "\nthreats = ~a\n" threats)
         (cond
           [(eq? threats #t) "checkmate"]
           [(pair? threats) (if (can_avoid_checkmate? king threats blocks-hash pieces player)
@@ -385,4 +380,38 @@
 
 ;(printf "~a~n" (init_board))
 
-(game_loop (init_board) 0)
+; Process inputs from current-input-port.
+; Return #t to indicate simple eof on current port, #f to indicate quit request.
+(define (process-input)
+  (let/ec k
+	  (let loop ()
+	    (let ([datum (read)])
+	      (printf "Datum: ~s~n" datum)
+	      ; (match 'B3A3 [(app symbol->string id) id])
+	      (match datum
+		[(and (? symbol?)
+		      (app symbol->string
+			   (regexp #px"([A-G][0-7])[\\s]*->[\\s]*([A-G][0-7])"
+				   (list _ src dst))))
+		 (thread-send gameplay-thread (format "~a->~a" src dst))]
+		[(? (compose not list?) (cons src dst))
+		 (thread-send gameplay-thread datum)]
+		['(quit)
+		 (thread-send gameplay-thread datum) (k #f)]
+		[`(pause ,sec) (sleep sec) #f]
+		[(== eof eq?) (k #t)]
+		[_ (printf "Discarding bad input: ~a~n" datum)])
+	      (loop)))))
+
+; Process input from provided path (if any), then stdin.
+(define (make-input-thread path)
+  (thread (lambda ()
+	    (and (if path (with-input-from-file path process-input) #t)
+		 (process-input)))))
+
+(define gameplay-thread (thread (lambda ()
+				  (game_loop (init_board) 0))))
+(define input-thread (make-input-thread "/home/bstahlman/tmp/save.dat"))
+
+(thread-wait gameplay-thread)
+(thread-wait input-thread)
