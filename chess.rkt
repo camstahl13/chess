@@ -180,21 +180,23 @@
                                                 "\n")
                                  (create-separator 8)))))))
 
-(define (get_valid_move player pieces)
-  (let ([raw_input (thread-receive)])
-    (if (and (string? raw_input) (= (string-length raw_input) 6) (equal? (substring raw_input 2 4) "->"))
-        (let ([rp (string-ref raw_input 0)]
-              [cp (string->number (substring raw_input 1 2))]
-              [rd (string-ref raw_input 4)]
-              [cd (string->number (substring raw_input 5 6))])
-          (if (and cp cd (char>=? rp #\A) (char<=? rp #\H) (char>=? rd #\A) (char<=? rd #\H))
-              (let ([posp (cons (- (char->integer rp) 65) cp)]
-                    [posd (cons (- (char->integer rd) 65) cd)])
-                (if (check_move player pieces posp posd)
-                    (values posp posd)
-                    (get_valid_move player pieces)))
-              (get_valid_move player pieces)))
-        (get_valid_move player pieces))))
+; Get valid move. Return the following values:
+; src-pos dst-pos updated-moves
+(define (get_valid_move player pieces moves)
+  (let/ec ret
+	  (let loop ()
+	    (let ([raw_input (read)])
+	      (match raw_input
+		[(? symbol? (app parse-move-str (cons posp posd)))
+		 (if (check_move player pieces posp posd)
+		   (ret posp posd (cons raw_input moves))
+		   (printf "Illegal move! Try again...~n"))]
+		[`(save ,path)
+		  (save-game path moves #:overwrite #t)]
+		[(== eof eq?) #:when (not (terminal-port? (current-input-port)))
+			      (current-input-port initial-terminal-port)]
+		[_ (printf "Invalid input! Try again...~n")])
+	      (loop)))))
 
 (define (actualij coords ci cj player)
   (cons (if (= player 0) (+ (car coords) ci) (- (car coords) ci))
@@ -357,7 +359,7 @@
                     "neither"
                     "stalemate")]))))
 
-(define (game_loop pieces player)
+(define (game_loop pieces moves player)
   (display_board pieces)
   (let ([cos (checkmate_or_stalemate? (car (findf (lambda (el)
                                                     (and (= player (piece-player (cdr el)))
@@ -366,9 +368,9 @@
                                       pieces
                                       player)])
     (if (equal? cos "neither")
-        (let-values ([(posp posd) (get_valid_move player pieces)])
+        (let-values ([(posp posd nmoves) (get_valid_move player pieces moves)])
           (let ([npieces (make_move player pieces posp posd)])
-            (game_loop npieces (abs (- player 1)))))
+            (game_loop npieces nmoves (abs (- player 1)))))
         (printf (string-append "Player "
                                (if (= player 0) "One " "Two ")
                                "is "
@@ -380,38 +382,41 @@
 
 ;(printf "~a~n" (init_board))
 
-; Process inputs from current-input-port.
-; Return #t to indicate simple eof on current port, #f to indicate quit request.
-(define (process-input)
-  (let/ec k
-	  (let loop ()
-	    (let ([datum (read)])
-	      (printf "Datum: ~s~n" datum)
-	      ; (match 'B3A3 [(app symbol->string id) id])
-	      (match datum
-		[(and (? symbol?)
-		      (app symbol->string
-			   (regexp #px"([A-H][0-7])[\\s]*->[\\s]*([A-H][0-7])"
-				   (list _ src dst))))
-		 (thread-send gameplay-thread (format "~a->~a" src dst))]
-		[(? (compose not list?) (cons src dst))
-		 (thread-send gameplay-thread datum)]
-		['(quit)
-		 (thread-send gameplay-thread datum) (k #f)]
-		[`(pause ,sec) (sleep sec) #f]
-		[(== eof eq?) (k #t)]
-		[_ (printf "Discarding bad input: ~a~n" datum)])
-	      (loop)))))
+; Save the input list of moves to the specified file, overwriting or appending
+; according to overwrite flag.
+(define (save-game path game #:overwrite [overwrite #t])
+  (with-output-to-file #:exists (if overwrite 'truncate 'append)
+		       path
+		       (lambda ()
+			 (for ([s (reverse game)])
+			   (writeln s))
+			 '())))
 
-; Process input from provided path (if any), then stdin.
-(define (make-input-thread path)
-  (thread (lambda ()
-	    (and (if path (with-input-from-file path process-input) #t)
-		 (process-input)))))
+; Convert input move symbol (e.g., A1->B2) to a pair of pairs representing the
+; src and dst positions (or #f if input invalid).
+(define (parse-move-str mov-sym)
+  (define chr->num (compose char->integer char-upcase (curryr string-ref 0)))
+  (define ltr->rownum (compose (curryr - (char->integer #\A)) chr->num))
+  (define dig->colnum (compose (curryr - (char->integer #\0)) chr->num))
+  (match (symbol->string mov-sym)
+    [(pregexp "([A-Ha-h])([0-7])->([A-Ha-h])([0-7])"
+	      (list _
+		    (app ltr->rownum sr) (app dig->colnum sc)
+		    (app ltr->rownum dr) (app dig->colnum dc)))
+     (cons (cons sr sc) (cons dr dc))]
+    [_ #f]))
 
-(define gameplay-thread (thread (lambda ()
-				  (game_loop (init_board) 0))))
-(define input-thread (make-input-thread "/home/bstahlman/tmp/save.dat"))
+; Save the initial console.
+(define initial-terminal-port (current-input-port))
 
-(thread-wait gameplay-thread)
-(thread-wait input-thread)
+; Process command line options
+(command-line
+  #:program "chess"
+  #:once-each
+  [("-i" "--saved-game") saved-game "File containing saved game"
+			 (current-input-port
+			   (open-input-file saved-game #:mode 'text))])
+
+
+(game_loop (init_board) (list) 0)
+
