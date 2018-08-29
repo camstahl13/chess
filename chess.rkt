@@ -182,7 +182,7 @@
 
 ; Get valid move. Return the following values:
 ; src-pos dst-pos updated-moves
-(define (get_valid_move player pieces moves)
+(define (get_valid_move player pieces moves quit-k)
   (let/ec ret
 	  (let loop ()
 	    (let ([raw_input (read)])
@@ -192,7 +192,9 @@
 		   (ret posp posd (cons raw_input moves))
 		   (printf "Illegal move! Try again...~n"))]
 		[`(save ,path)
-		  (save-game path moves #:overwrite #t)]
+		  (save-game path moves #:overwrite #t)
+		  (printf "Game saved~n")]
+		['(quit) (quit-k)]
 		[(== eof eq?) #:when (not (terminal-port? (current-input-port)))
 			      (current-input-port initial-terminal-port)]
 		[_ (printf "Invalid input! Try again...~n")])
@@ -359,7 +361,7 @@
                     "neither"
                     "stalemate")]))))
 
-(define (game_loop pieces moves player)
+(define (game_loop quit-k pieces moves player)
   (display_board pieces)
   (let ([cos (checkmate_or_stalemate? (car (findf (lambda (el)
                                                     (and (= player (piece-player (cdr el)))
@@ -368,9 +370,9 @@
                                       pieces
                                       player)])
     (if (equal? cos "neither")
-        (let-values ([(posp posd nmoves) (get_valid_move player pieces moves)])
+        (let-values ([(posp posd nmoves) (get_valid_move player pieces moves quit-k)])
           (let ([npieces (make_move player pieces posp posd)])
-            (game_loop npieces nmoves (abs (- player 1)))))
+            (game_loop quit-k npieces nmoves (abs (- player 1)))))
         (printf (string-append "Player "
                                (if (= player 0) "One " "Two ")
                                "is "
@@ -418,5 +420,7 @@
 			   (open-input-file saved-game #:mode 'text))])
 
 
-(game_loop (init_board) (list) 0)
+; Note: Creating a quit-game escape continuation to facilitate use of "quit"
+; command in lieu of Ctrl-C.
+(let/ec quit-k (game_loop quit-k (init_board) (list) 0))
 
