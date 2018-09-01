@@ -127,10 +127,12 @@
                         type)
          (or (equal? type "knight")
              (has_path? player pieces posp posd difference type))
-         (not (is_threatened? (car (findf (lambda (el)
+         (not (is_threatened? (if (= (piece-type piece) "king")
+                                  posd
+                                  (car (findf (lambda (el)
                                             (and (= player (piece-player (cdr el)))
                                                  (equal? (piece-type (cdr el)) "king")))
-                                          (hash->list pieces)))
+                                          (hash->list pieces))))
                               (hash-set (hash-remove pieces posp) posd piece)
                               player
                               (hash)
